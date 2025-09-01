@@ -4,6 +4,7 @@
 import torch
 import os
 from glob import glob
+import sys, subprocess, shutil
 
 from fairseq import bleu, checkpoint_utils, options, progress_bar, tasks, utils
 from fairseq.meters import StopwatchMeter, TimeMeter
@@ -14,43 +15,132 @@ RDLogger.DisableLog('rdApp.*')
 
 OVERRIDES = ['sample_beta', 'gen_coord_noise', 'gen_rot', 'gen_vae']
 
-
 def prepare_pdb_data(pdb_id, ligand_inchi=None, DemoDataFolder="TamGen_Demo_Data", thr=10):
-    out_split = pdb_id.lower()
-    FF = glob(f"{DemoDataFolder}/*")
-    for ff in FF:
-        if f"gen_{out_split}" in ff:
-            print(f"{pdb_id} is downloaded")
-            return
-    
-    os.system(f"mkdir -p {DemoDataFolder}")
-    if ligand_inchi is None:
-        with open("tmp_pdb.csv", "w") as fw:
-            print("pdb_id", file=fw)
-            print(f"{pdb_id}", file=fw)
-    else:
-        with open("tmp_pdb.csv", "w") as fw:
-            print("pdb_id,ligand_inchi", file=fw)
-            print(f"{pdb_id},{ligand_inchi}", file=fw)
-    
-    os.system(f"python scripts/build_data/prepare_pdb_ids.py tmp_pdb.csv gen_{out_split} -o {DemoDataFolder} -t {thr}")
-    os.system(r"rm tmp_pdb.csv")
+    """
+    Build a dataset split named f"gen_{pdb_id.lower()}" under DemoDataFolder using prepare_pdb_ids.py.
+    Returns the absolute path to the created split folder.
+    """
+    out_split = f"gen_{pdb_id.lower()}"
+    out_dir = os.path.join(DemoDataFolder, out_split)
+
+    # short-circuit if already prepared
+    if os.path.isdir(out_dir):
+        print(f"[OK] {pdb_id} already prepared at {out_dir}")
+        return os.path.abspath(out_dir)
+
+    os.makedirs(DemoDataFolder, exist_ok=True)
+
+    csv_path = "tmp_pdb.csv"
+    with open(csv_path, "w", newline="") as fw:
+        if ligand_inchi is None:
+            fw.write("pdb_id\n")
+            fw.write(f"{pdb_id}\n")
+        else:
+            fw.write("pdb_id,ligand_inchi\n")
+            fw.write(f"{pdb_id},{ligand_inchi}\n")
+
+    cmd = [
+        sys.executable, "scripts/build_data/prepare_pdb_ids.py",
+        csv_path, out_split, "-o", DemoDataFolder, "-t", str(thr)
+    ]
+    print("[RUN]", " ".join(cmd))
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    print(res.stdout)
+    if res.returncode != 0:
+        print(res.stderr)
+        raise RuntimeError(f"prepare_pdb_ids.py failed (rc={res.returncode}). See error above.")
+
+    try:
+        os.remove(csv_path)
+    except OSError:
+        pass
+
+    if not os.path.isdir(out_dir):
+        raise FileNotFoundError(f"Expected output at {out_dir}, but it was not created.")
+    print(f"[DONE] Wrote dataset to {out_dir}")
+    return os.path.abspath(out_dir)
+
+# --- optional: the 'center' variant (use prepare_pdb_ids_center.py) ---
+def prepare_pdb_data_center(pdb_id, center_xyz, DemoDataFolder="TamGen_Demo_Data", thr=10, uniprot_id=None):
+    """
+    Build dataset using explicit pocket center (x,y,z).
+    center_xyz: tuple/list of 3 floats (center_x, center_y, center_z).
+    """
+    cx, cy, cz = center_xyz
+    out_split = f"gen_{pdb_id.lower()}"
+    out_dir = os.path.join(DemoDataFolder, out_split)
+    if os.path.isdir(out_dir):
+        print(f"[OK] {pdb_id} already prepared at {out_dir}")
+        return os.path.abspath(out_dir)
+
+    os.makedirs(DemoDataFolder, exist_ok=True)
+    csv_path = "tmp_pdb.csv"
+    with open(csv_path, "w", newline="") as fw:
+        if uniprot_id is None:
+            fw.write("pdb_id,center_x,center_y,center_z\n")
+            fw.write(f"{pdb_id},{cx},{cy},{cz}\n")
+        else:
+            fw.write("pdb_id,center_x,center_y,center_z,uniprot_id\n")
+            fw.write(f"{pdb_id},{cx},{cy},{cz},{uniprot_id}\n")
+
+    cmd = [
+        sys.executable, "scripts/build_data/prepare_pdb_ids_center.py",
+        csv_path, out_split, "-o", DemoDataFolder, "-t", str(thr)
+    ]
+    print("[RUN]", " ".join(cmd))
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    print(res.stdout)
+    if res.returncode != 0:
+        print(res.stderr)
+        raise RuntimeError(f"prepare_pdb_ids_center.py failed (rc={res.returncode}). See error above.")
+
+    try:
+        os.remove(csv_path)
+    except OSError:
+        pass
+
+    if not os.path.isdir(out_dir):
+        raise FileNotFoundError(f"Expected output at {out_dir}, but it was not created.")
+    print(f"[DONE] Wrote dataset to {out_dir}")
+    return os.path.abspath(out_dir)
 
 
-def prepare_pdb_data_center(pdb_id, scaffold_file=None, DemoDataFolder="TamGen_Demo_Data", thr=10):
-    out_split = pdb_id.lower()
-    FF = glob(f"{DemoDataFolder}/*")
-    for ff in FF:
-        if f"gen_{out_split}" in ff:
-            print(f"{pdb_id} is downloaded")
-            return
-
-    with open("tmp_pdb.csv", "w") as fw:
-        print("pdb_id,ligand_inchi", file=fw)
-        print(f"{pdb_id},{ligand_inchi}", file=fw)
+# def prepare_pdb_data(pdb_id, ligand_inchi=None, DemoDataFolder="TamGen_Demo_Data", thr=10):
+#     out_split = pdb_id.lower()
+#     FF = glob(f"{DemoDataFolder}/*")
+#     for ff in FF:
+#         if f"gen_{out_split}" in ff:
+#             print(f"{pdb_id} is downloaded")
+#             return
     
-    os.system(f"python scripts/build_data/prepare_pdb_ids.py tmp_pdb.csv gen_{out_split} -o {DemoDataFolder} -t {thr}")
-    os.system(r"rm tmp_pdb.csv")
+#     os.system(f"mkdir -p {DemoDataFolder}")
+#     if ligand_inchi is None:
+#         with open("tmp_pdb.csv", "w") as fw:
+#             print("pdb_id", file=fw)
+#             print(f"{pdb_id}", file=fw)
+#     else:
+#         with open("tmp_pdb.csv", "w") as fw:
+#             print("pdb_id,ligand_inchi", file=fw)
+#             print(f"{pdb_id},{ligand_inchi}", file=fw)
+    
+#     os.system(f"python scripts/build_data/prepare_pdb_ids.py tmp_pdb.csv gen_{out_split} -o {DemoDataFolder} -t {thr}")
+#     os.system(r"rm tmp_pdb.csv")
+
+
+# def prepare_pdb_data_center(pdb_id, scaffold_file=None, DemoDataFolder="TamGen_Demo_Data", thr=10):
+#     out_split = pdb_id.lower()
+#     FF = glob(f"{DemoDataFolder}/*")
+#     for ff in FF:
+#         if f"gen_{out_split}" in ff:
+#             print(f"{pdb_id} is downloaded")
+#             return
+
+#     with open("tmp_pdb.csv", "w") as fw:
+#         print("pdb_id,ligand_inchi", file=fw)
+#         print(f"{pdb_id},{ligand_inchi}", file=fw)
+    
+#     os.system(f"python scripts/build_data/prepare_pdb_ids.py tmp_pdb.csv gen_{out_split} -o {DemoDataFolder} -t {thr}")
+#     os.system(r"rm tmp_pdb.csv")
 
 
 def filter_generated_cmpd(smi):
